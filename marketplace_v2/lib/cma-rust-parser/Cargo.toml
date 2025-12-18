@@ -1,0 +1,29 @@
+[package]
+name = "cma-rust-parser"
+version = "0.1.0"
+edition = "2021"
+authors = ["Your Name <your.email@example.com>"]
+description = "Rust bindings for Cartesi Machine Asset Tools (CMA) - a ledger and parser for managing assets on Cartesi rollups"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/yourusername/machine-asset-tools-rust-bindings"
+keywords = ["cartesi", "rollup", "ledger", "parser", "blockchain"]
+categories = ["blockchain", "cryptography"]
+
+[dependencies]
+hex = "0.4"
+lazy_static = { version = "1.4", optional = true }
+json = "0.12"
+once_cell = "1.18"
+ethers-core = "1.0.0"
+
+[build-dependencies]
+bindgen = "0.69"
+
+[features]
+default = ["native"]
+native = ["lazy_static"]  # Mac testing with mocks
+riscv64 = []  # Cross-build later
+
+[lib]
+name = "cma_rust_parser"
+path = "src/lib.rs"

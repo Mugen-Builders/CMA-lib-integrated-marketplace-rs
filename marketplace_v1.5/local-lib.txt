@@ -1,0 +1,6 @@
+cma-rust-parser = {path = 'lib/cma-rust-parser'}
+cma-rust-parser = "0.1.3"
+
+Added Libclang-dev
+update package manager
+change position of binutils

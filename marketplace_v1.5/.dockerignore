@@ -1,0 +1,12 @@
+.cartesi
+target
+node_modules
+*.log
+.git
+.gitignore
+*.md
+!lib/cma-rust-parser/README.md
+execution_script.js
+package.json
+package-lock.json
+local-lib.txt

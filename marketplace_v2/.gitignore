@@ -1,0 +1,5 @@
+.cartesi
+target
+.env
+/lib/cma-rust-parser/target
+/node_modules
