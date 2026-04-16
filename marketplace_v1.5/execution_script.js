@@ -53,10 +53,14 @@ function encodeJsonAsBytes(payloadJson) {
 
 // ---------- CORE ACTIONS ----------
 
-async function addInput(appContract, hex_input, signer) {
+async function addInput(appContract, payload, signer) {
   const contract = new ethers.Contract(inputBox, targetAbi, signer);
+  const encodedPayload =
+    typeof payload === "string" && payload.startsWith("0x")
+      ? payload
+      : encodeJsonAsBytes(payload);
   console.log(`🟦 Calling addInput(appContract=${appContract})...`);
-  const tx = await contract.addInput(appContract, hex_input);
+  const tx = await contract.addInput(appContract, encodedPayload);
   console.log("→ tx:", tx.hash);
   const receipt = await tx.wait();
   console.log("✅ addInput confirmed in block", receipt.blockNumber);
@@ -128,7 +132,7 @@ async function mintNFT(nftAddress, to, tokenId) {
 async function approveNFT(nftAddress, to, tokenId, signer) {
   const nft = new ethers.Contract(nftAddress, nftAbi, signer);
   console.log(`🧾 Approving ${to} to manage NFT tokenId=${tokenId}...`);
-//   const tx = await nft.approve(to, tokenId);
+  //   const tx = await nft.approve(to, tokenId);
   const tx = await nft.setApprovalForAll(erc721_portal, true);
   console.log("→ tx:", tx.hash);
   const receipt = await tx.wait();
@@ -143,7 +147,7 @@ async function main() {
   await approveERC20(erc20_token, erc20_portal, amount, signer1);
   await sleep(2000);
 
-    // 3️⃣ Deposit
+  // 3️⃣ Deposit
   await depositERC20Tokens(erc20_token, app, amount, "", signer1);
   await sleep(2000);
 
@@ -156,7 +160,7 @@ async function main() {
   await depositERC721Tokens(erc721_token, app, tokenId, "", "", signer1);
   await sleep(2000);
 
-//   4️⃣ Transfer (or skip if not needed)
+  //   4️⃣ Transfer (or skip if not needed)
   await transferERC20(erc20_token, address2, amount);
   await sleep(2000);
 
@@ -173,7 +177,7 @@ async function main() {
   await addInput(app, hex_input, signer2);
   await sleep(2000);
 
-  await addInput(app, {function_type: "purchase_token", token_id: tokenId.toString()}, signer2);
+  await addInput(app, { function_type: "purchase_token", token_id: tokenId.toString() }, signer2);
   await sleep(2000);
 
   console.log("\n✅ All actions completed!");
