@@ -18,7 +18,8 @@ cma-rust-parser/
 │   ├── types.rs           # Type definitions (Address, U256, etc.)
 │   └── mocks.rs           # Mock implementations (only compiled with "native" feature)
 ├── tests/                  # Integration tests
-│   └── ledger_tests.rs   # Comprehensive ledger tests
+│   ├── ledger_tests.rs   # Comprehensive ledger tests
+│   └── parser_tests.rs   # Comprehensive parser tests
 └── lib/                    # Vendor dependencies (included in package)
     ├── cpp-build/         # C++ library
     │   ├── include/       # C/C++ headers
@@ -56,29 +57,9 @@ cma-rust-parser/
 
 3. **All functionality** is exposed through the main `lib.rs` file
 
-## Publishing Checklist
-
-Before publishing to crates.io:
-
-- [ ] Update `authors` in `Cargo.toml`
-- [ ] Update `repository` URL in `Cargo.toml`
-- [ ] Add LICENSE files (Apache-2.0 and/or MIT)
-- [ ] Ensure version follows semantic versioning
-- [ ] Test with `cargo test`
-- [ ] Test package with `cargo package`
-- [ ] Verify all files are included (check `target/package/cma-rust-parser-0.1.0/`)
-- [ ] Publish with `cargo publish`
-
 ## File Sizes
 
 The `lib/cpp-build/lib/` directory contains compiled static libraries. These are:
 - Platform-specific (RISC-V for Cartesi)
 - Included in the package for users targeting RISC-V
 - Not used when `native` feature is enabled (default)
-
-## Notes
-
-- The parser module is currently commented out in `src/lib.rs` as it's not fully implemented
-- When ready, uncomment the parser exports to make them available
-- All tests pass with the current structure
-- The crate is ready for publishing once metadata is updated

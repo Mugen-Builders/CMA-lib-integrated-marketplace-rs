@@ -1,13 +1,15 @@
-use cma_rust_parser::{Address, AddressCBindingsExt, U256, U256CBindingsExt};
-use ethers_core::abi::{ParamType, Token, decode};
+use cma_rust_parser::helpers::{ToAddress, ToJson};
+use cma_rust_parser::ledger::Ledger;
+use cma_rust_parser::parser::{
+    cma_decode_advance, cma_decode_inspect, cma_encode_voucher, CmaParserErc721VoucherFields,
+    CmaParserError, CmaParserInputData, CmaParserInputType, CmaParserVoucherType,
+    CmaVoucherFieldType,
+};
+use cma_rust_parser::{Address, AddressCBindingsExt, U256CBindingsExt, U256};
+use ethers_core::abi::{decode, ParamType, Token};
+use hex;
 use json::{object, JsonValue};
 use std::env;
-use cma_rust_parser::helpers::{ToAddress, ToJson};
-use cma_rust_parser::parser::{
-    CmaParserErc721VoucherFields, CmaParserError, CmaParserInputData, CmaParserInputType, CmaParserVoucherType, CmaVoucherFieldType, cma_decode_advance, cma_decode_inspect, cma_encode_voucher
-};
-use cma_rust_parser::ledger::{Ledger};
-use hex;
 
 #[derive(Default)]
 pub struct Storage {
@@ -23,15 +25,15 @@ pub struct Storage {
 }
 
 impl Storage {
-    fn new (
+    fn new(
         erc721_portal_address: String,
         erc20_portal_address: String,
         erc721_token: String,
         erc20_token: String,
         list_price: u128,
-        ledger: Ledger
+        ledger: Ledger,
     ) -> Self {
-        Storage{
+        Storage {
             erc20_portal_address,
             erc721_portal_address,
             erc20_token,
@@ -40,7 +42,7 @@ impl Storage {
             app_address: "0x0000000000000000000000000000000000000000".to_string(),
             listed_tokens: Vec::new(),
             erc721_id_to_owner_address: std::collections::HashMap::new(),
-            ledger
+            ledger,
         }
     }
 
@@ -59,31 +61,64 @@ impl Storage {
     }
 
     fn change_erc721_token_owner(&mut self, token_id: u128, new_owner: String) {
-       if let Some(owner) =  self.erc721_id_to_owner_address.get_mut(&token_id) {
+        if let Some(owner) = self.erc721_id_to_owner_address.get_mut(&token_id) {
             *owner = new_owner.clone();
-       }
+        }
     }
 
-    async fn purchase_erc721_token(&mut self, buyer_address: &str, token_id: u128) -> Result<(), String> {
+    async fn purchase_erc721_token(
+        &mut self,
+        buyer_address: &str,
+        token_id: u128,
+    ) -> Result<(), String> {
         let owner = self.get_erc721_token_owner(token_id).unwrap();
-        let owner_id = self.ledger.retrieve_account_via_address(Address::from_str_hex(owner).unwrap()).map_err(|e| format!("{}", e))?;
-        let buyer_id = self.ledger.retrieve_account_via_address(Address::from_str_hex(buyer_address).unwrap()).map_err(|e| format!("{}", e))?;
-        let erc20_token_id = self.ledger.retrieve_erc20_asset_via_address(Address::from_str_hex(self.erc20_token.as_str()).unwrap()).map_err(|e| format!("{}", e))?;
-        let erc721_token_id = self.ledger.retrieve_erc721_assets_via_address(Address::from_str_hex(self.erc721_token.to_lowercase().as_str()).unwrap(), U256::from(token_id)).map_err(|e| format!("{}", e))?;
+        let owner_id = self
+            .ledger
+            .retrieve_account_via_address(Address::from_str_hex(owner).unwrap())
+            .map_err(|e| format!("{}", e))?;
+        let buyer_id = self
+            .ledger
+            .retrieve_account_via_address(Address::from_str_hex(buyer_address).unwrap())
+            .map_err(|e| format!("{}", e))?;
+        let erc20_token_id = self
+            .ledger
+            .retrieve_erc20_asset_via_address(
+                Address::from_str_hex(self.erc20_token.as_str()).unwrap(),
+            )
+            .map_err(|e| format!("{}", e))?;
+        let erc721_token_id = self
+            .ledger
+            .retrieve_erc721_assets_via_address(
+                Address::from_str_hex(self.erc721_token.to_lowercase().as_str()).unwrap(),
+                U256::from(token_id),
+            )
+            .map_err(|e| format!("{}", e))?;
 
         println!("USER WITH ID: {:?}, ATTEMPT TO PURCHASE USING TOKEN WITH ASSET_ID {:?}, FROM SELLER: {:?}", buyer_id, erc20_token_id, owner_id);
-        
-        match self.ledger.transfer(erc20_token_id, buyer_id, owner_id, U256::from(self.list_price)).map_err(|e| format!("{}", e)) {
+
+        match self
+            .ledger
+            .transfer(
+                erc20_token_id,
+                buyer_id,
+                owner_id,
+                U256::from(self.list_price),
+            )
+            .map_err(|e| format!("{}", e))
+        {
             Ok(_) => {
                 self.listed_tokens.retain(|token| *token != token_id);
                 let zero_address = "0x0000000000000000000000000000000000000000";
-                self.change_erc721_token_owner( token_id,  zero_address.to_string());
+                self.change_erc721_token_owner(token_id, zero_address.to_string());
 
-                match self.ledger.withdraw(erc721_token_id, owner_id, U256::from_u64(1)) {
-                    Ok(_) => {return Ok(())},
-                    Err(e) => {return Err(format!("{}", e))}
+                match self
+                    .ledger
+                    .withdraw(erc721_token_id, owner_id, U256::from_u64(1))
+                {
+                    Ok(_) => return Ok(()),
+                    Err(e) => return Err(format!("{}", e)),
                 }
-            },
+            }
             Err(e) => {
                 return Err(format!("{}", e));
             }
@@ -91,24 +126,44 @@ impl Storage {
     }
 }
 
-async fn handle_erc20_deposit(input: &CmaParserInputData, storage: &mut Storage) -> Result<(), String> {
+async fn handle_erc20_deposit(
+    input: &CmaParserInputData,
+    storage: &mut Storage,
+) -> Result<(), String> {
     if let CmaParserInputData::Erc20Deposit(data) = input {
         let token_address = format!("{:?}", data.token).to_lowercase();
         let depositor_address = format!("{:?}", data.sender);
         let amount_deposited = data.amount;
-    
+
         println!("TOKEN ADDRESS: {}, EXPECTED TOKEN: {},  DEPOSITOR ADDRESS: {:?}, AMOUNT DEPOSITED: {}, IS SAME ADDRESS: {}, ADDRESS LENGTH: {}", 
         token_address, storage.erc20_token.to_lowercase(), depositor_address, amount_deposited, {token_address.to_lowercase() == storage.erc20_token.to_lowercase()}, token_address.len());
 
-        let depositor_id = storage.ledger.retrieve_account_via_address(Address::from_str_hex(depositor_address.as_str()).unwrap()).map_err(|e| format!("{}", e))?;
-        let asset_id = storage.ledger.retrieve_erc20_asset_via_address(Address::from_str_hex(token_address.as_str()).unwrap()).map_err(|e| format!("{}", e))?;
+        let depositor_id = storage
+            .ledger
+            .retrieve_account_via_address(
+                Address::from_str_hex(depositor_address.as_str()).unwrap(),
+            )
+            .map_err(|e| format!("{}", e))?;
+        let asset_id = storage
+            .ledger
+            .retrieve_erc20_asset_via_address(
+                Address::from_str_hex(token_address.as_str()).unwrap(),
+            )
+            .map_err(|e| format!("{}", e))?;
 
-        match storage.ledger.deposit(asset_id, depositor_id, amount_deposited) {
+        match storage
+            .ledger
+            .deposit(asset_id, depositor_id, amount_deposited)
+        {
             Ok(_) => {
                 println!("USER WITH ID: {:?}, DEPOSITED TOKEN WITH ASSET_ID {:?}, ADDRESS: {:?}, AND AMOUNT: {}", depositor_id, asset_id, Address::from_str_hex(token_address.as_str()).unwrap(), amount_deposited);
-                emit_notice(format!("AssetId Id: {:?}, Deposited by User: {}", asset_id, depositor_address)).await;
-                return Ok(())
-            },
+                emit_notice(format!(
+                    "AssetId Id: {:?}, Deposited by User: {}",
+                    asset_id, depositor_address
+                ))
+                .await;
+                return Ok(());
+            }
             Err(e) => {
                 println!("Error depositiing Token!!!: {}", e);
                 emit_report(format!("Error depositing token:: {}", e)).await;
@@ -121,30 +176,59 @@ async fn handle_erc20_deposit(input: &CmaParserInputData, storage: &mut Storage)
     }
 }
 
-async fn handle_erc721_deposit(input: &CmaParserInputData, storage: &mut Storage) -> Result<(), String> {
+async fn handle_erc721_deposit(
+    input: &CmaParserInputData,
+    storage: &mut Storage,
+) -> Result<(), String> {
     if let CmaParserInputData::Erc721Deposit(data) = input {
         let token_address = format!("{:?}", data.token);
         let depositor_address = format!("{:?}", data.sender);
         let token_id = data.token_id;
 
-        let depositor_id = storage.ledger.retrieve_account_via_address(Address::from_str_hex(depositor_address.as_str()).unwrap()).map_err(|e| format!("{}", e))?;
-        let asset_id = storage.ledger.retrieve_erc721_assets_via_address(Address::from_str_hex(&token_address).unwrap(), token_id).map_err(|e| format!("{}", e))?;
+        let depositor_id = storage
+            .ledger
+            .retrieve_account_via_address(
+                Address::from_str_hex(depositor_address.as_str()).unwrap(),
+            )
+            .map_err(|e| format!("{}", e))?;
+        let asset_id = storage
+            .ledger
+            .retrieve_erc721_assets_via_address(
+                Address::from_str_hex(&token_address).unwrap(),
+                token_id,
+            )
+            .map_err(|e| format!("{}", e))?;
 
-        match storage.ledger.deposit(asset_id, depositor_id, U256::from_u64(1)) {
+        match storage
+            .ledger
+            .deposit(asset_id, depositor_id, U256::from_u64(1))
+        {
             Ok(_) => {
                 storage.list_token_for_sale(token_id.as_u128());
 
-                println!("RECORED TOKEN DEPOSIT AND OWNER FOR TOKEN ID: {} AND OWNER: {}", token_id.as_u128(), depositor_address.to_lowercase());
-                println!("USER WITH ID: {:?}, DEPOSITED TOKEN WITH ASSET_ID {:?}, AND ID: {}", depositor_id, asset_id, token_id);
+                println!(
+                    "RECORED TOKEN DEPOSIT AND OWNER FOR TOKEN ID: {} AND OWNER: {}",
+                    token_id.as_u128(),
+                    depositor_address.to_lowercase()
+                );
+                println!(
+                    "USER WITH ID: {:?}, DEPOSITED TOKEN WITH ASSET_ID {:?}, AND ID: {}",
+                    depositor_id, asset_id, token_id
+                );
 
                 let zero_address = "0x0000000000000000000000000000000000000000".to_string();
                 if storage.get_erc721_token_owner(token_id.as_u128()) == Some(&zero_address) {
-                    storage.change_erc721_token_owner(token_id.as_u128(), depositor_address.to_lowercase());
+                    storage.change_erc721_token_owner(
+                        token_id.as_u128(),
+                        depositor_address.to_lowercase(),
+                    );
                 } else {
-                    storage.erc721_id_to_owner_address.insert(token_id.as_u128(), depositor_address.to_lowercase());
+                    storage
+                        .erc721_id_to_owner_address
+                        .insert(token_id.as_u128(), depositor_address.to_lowercase());
                 }
-                return Ok(())
-            },
+                return Ok(());
+            }
             Err(e) => {
                 println!("Error depositiing Token!!!: {}", e);
                 emit_report(format!("Error depositing token:: {}", e)).await;
@@ -157,12 +241,15 @@ async fn handle_erc721_deposit(input: &CmaParserInputData, storage: &mut Storage
     }
 }
 
-async fn handle_purchase_token(sender: String, input_args: &[u8], storage: &mut Storage) -> Result<String, String> {
-    let param_types = vec![
-        ParamType::Uint(256),
-    ];
+async fn handle_purchase_token(
+    sender: String,
+    input_args: &[u8],
+    storage: &mut Storage,
+) -> Result<String, String> {
+    let param_types = vec![ParamType::Uint(256)];
 
-    let decoded = decode(&param_types, input_args).map_err(|e| format!("ABI decode failed: {}", e))?;
+    let decoded =
+        decode(&param_types, input_args).map_err(|e| format!("ABI decode failed: {}", e))?;
 
     let token_id = match &decoded[0] {
         Token::Uint(v) => v,
@@ -179,24 +266,27 @@ async fn handle_purchase_token(sender: String, input_args: &[u8], storage: &mut 
     }
     match storage.purchase_erc721_token(&sender, token_id).await {
         Ok(_) => {
-            let voucher_request = CmaParserErc721VoucherFields{
+            let voucher_request = CmaParserErc721VoucherFields {
                 token: storage.erc721_token.to_address().unwrap(),
                 token_id: token_id.into(),
                 receiver: sender.to_address().unwrap(),
-                value: U256::from_dec_str("0").unwrap(),
-                application_address: storage.app_address.to_address().unwrap()
+                // value: U256::from_dec_str("0").unwrap(),
+                application_address: storage.app_address.to_address().unwrap(),
             };
 
-            if let Ok(voucher) = cma_encode_voucher(CmaParserVoucherType::CmaParserVoucherTypeErc721, CmaVoucherFieldType::Erc721VoucherFields(voucher_request)) {
+            if let Ok(voucher) = cma_encode_voucher(
+                CmaParserVoucherType::CmaParserVoucherTypeErc721,
+                CmaVoucherFieldType::Erc721VoucherFields(voucher_request),
+            ) {
                 let json_string = format!("{}", voucher.to_json());
                 println!("VOUCHER STRING IS: {}", json_string);
                 emit_voucher(voucher.to_json()).await;
                 println!("Token purchased and Withdrawn successfully");
             }
             return Ok(String::new());
-        },
+        }
         Err(e) => {
-            emit_report("Failed to purchase token".into()).await; 
+            emit_report("Failed to purchase token".into()).await;
             println!("Failed to purchase token: {}", e);
             return Err(format!("Failed to purchase token: {}", e));
         }
@@ -217,10 +307,17 @@ async fn handle_application_defined_methods(input: &CmaParserInputData, storage:
             // Purchase token
             "0x3048f512" => {
                 let _ = handle_purchase_token(caller, encoded_args, storage).await;
-            },
+            }
             _ => {
-                println!("Unsupported application-defined method: {}", function_selector);
-                emit_report(format!("Unsupported application-defined method: {}", function_selector)).await;   
+                println!(
+                    "Unsupported application-defined method: {}",
+                    function_selector
+                );
+                emit_report(format!(
+                    "Unsupported application-defined method: {}",
+                    function_selector
+                ))
+                .await;
             }
         }
     }
@@ -230,34 +327,33 @@ pub async fn handle_advance(
     _client: &hyper::Client<hyper::client::HttpConnector>,
     _server_addr: &str,
     request: JsonValue,
-    storage: &mut Storage
+    storage: &mut Storage,
 ) -> Result<&'static str, Box<dyn std::error::Error>> {
     println!("Received advance request data {}", &request);
     let zero_address = "0x0000000000000000000000000000000000000000".to_string();
 
-    let msg_sender =
-    request["data"]["metadata"]["msg_sender"]
+    let msg_sender = request["data"]["metadata"]["msg_sender"]
         .as_str()
         .ok_or("Invalid msg_sender address")?;
 
     let app_addr = request["data"]["metadata"]["app_contract"]
-    .as_str()
-    .ok_or("Missing payload")?;
+        .as_str()
+        .ok_or("Missing payload")?;
     if storage.app_address == zero_address {
         storage.app_address = app_addr.to_string();
     }
-    
+
     let mut decoded_req = Err(CmaParserError::Unknown);
 
     match msg_sender {
         s if s.to_lowercase() == storage.erc721_portal_address.to_lowercase() => {
             let req_type = CmaParserInputType::CmaParserInputTypeErc721Deposit;
             decoded_req = cma_decode_advance(req_type, request.clone());
-        },
+        }
         s if s.to_lowercase() == storage.erc20_portal_address.to_lowercase() => {
             let req_type = CmaParserInputType::CmaParserInputTypeErc20Deposit;
             decoded_req = cma_decode_advance(req_type, request.clone());
-        },
+        }
         _ => {
             let req_type: CmaParserInputType = CmaParserInputType::CmaParserInputTypeAuto;
             decoded_req = cma_decode_advance(req_type, request.clone());
@@ -265,19 +361,17 @@ pub async fn handle_advance(
     }
 
     match decoded_req {
-        Ok(decoded) => {
-            match decoded.req_type {
-                CmaParserInputType::CmaParserInputTypeErc20Deposit => {
-                    let _ = handle_erc20_deposit(&decoded.input, storage).await;
-                },
-                CmaParserInputType::CmaParserInputTypeErc721Deposit => {
-                     let _ = handle_erc721_deposit(&decoded.input, storage).await;
-                },
-                CmaParserInputType::CmaParserInputTypeUnidentified => {
-                    handle_application_defined_methods(&decoded.input, storage).await;
-                }
-                _ => {}
+        Ok(decoded) => match decoded.req_type {
+            CmaParserInputType::CmaParserInputTypeErc20Deposit => {
+                let _ = handle_erc20_deposit(&decoded.input, storage).await;
             }
+            CmaParserInputType::CmaParserInputTypeErc721Deposit => {
+                let _ = handle_erc721_deposit(&decoded.input, storage).await;
+            }
+            CmaParserInputType::CmaParserInputTypeUnidentified => {
+                handle_application_defined_methods(&decoded.input, storage).await;
+            }
+            _ => {}
         },
         Err(e) => {
             println!("Error decoding advance request: {:?}", e);
@@ -287,55 +381,75 @@ pub async fn handle_advance(
     Ok("accept")
 }
 
-
 pub async fn handle_inspect(
     _client: &hyper::Client<hyper::client::HttpConnector>,
     _server_addr: &str,
     request: JsonValue,
-    storage: &mut Storage
+    storage: &mut Storage,
 ) -> Result<&'static str, Box<dyn std::error::Error>> {
     println!("Received inspect request data {}", &request);
 
     match cma_decode_inspect(request) {
-        Ok(parsed_json) => {
-            match parsed_json.req_type {
-                CmaParserInputType::CmaParserInputTypeBalance => {
-                   if let CmaParserInputData::Balance(data) = parsed_json.input {
-                        let account_id = storage.ledger.retrieve_account_via_address(data.account).map_err(|e| format!("{}", e))?;
-                        let mut token;
-                        let token_id = data.token_ids;
-                        if let Some(tokens) = token_id.clone() {
-                            if tokens.is_empty() {
-                                token = storage.ledger.retrieve_erc20_asset_via_address(data.token).map_err(|e| format!("{}", e))?;
-                                let token_bal = storage.ledger.get_balance(token, account_id).map_err(|e| format!("{}", e))?;
-                                emit_report(format!("User: {}, balance: {:?}", data.account.to_string(), token_bal)).await;
-                            } else {
-                                let mut balance: Vec<U256> = Vec::new();
-                                for token_id in tokens {
-                                    token = storage.ledger.retrieve_erc721_assets_via_address(data.token, token_id).map_err(|e| format!("{}", e))?;
-                                    let token_bal = storage.ledger.get_balance(token, account_id).map_err(|e| format!("{}", e))?;
-                                    balance.push(token_bal);
-                                }
-                                emit_report(format!("User: {}, balance: {:?}", data.account.to_string(), balance)).await;
+        Ok(parsed_json) => match parsed_json.req_type {
+            CmaParserInputType::CmaParserInputTypeBalance => {
+                if let CmaParserInputData::Balance(data) = parsed_json.input {
+                    let account_id = storage
+                        .ledger
+                        .retrieve_account_via_address(data.account)
+                        .map_err(|e| format!("{}", e))?;
+                    let mut token;
+                    let token_id = data.token_ids;
+                    if let Some(tokens) = token_id.clone() {
+                        if tokens.is_empty() {
+                            token = storage
+                                .ledger
+                                .retrieve_erc20_asset_via_address(data.token)
+                                .map_err(|e| format!("{}", e))?;
+                            let token_bal = storage
+                                .ledger
+                                .get_balance(token, account_id)
+                                .map_err(|e| format!("{}", e))?;
+                            emit_report(format!(
+                                "User: {}, balance: {:?}",
+                                data.account.to_string(),
+                                token_bal
+                            ))
+                            .await;
+                        } else {
+                            let mut balance: Vec<U256> = Vec::new();
+                            for token_id in tokens {
+                                token = storage
+                                    .ledger
+                                    .retrieve_erc721_assets_via_address(data.token, token_id)
+                                    .map_err(|e| format!("{}", e))?;
+                                let token_bal = storage
+                                    .ledger
+                                    .get_balance(token, account_id)
+                                    .map_err(|e| format!("{}", e))?;
+                                balance.push(token_bal);
                             }
-                        } 
-                   }
-                }
-                _ => {}
-            }
-        }
-        Err(err) => {
-            match err {
-                CmaParserError::IncompatibleInput => {
-                    let listed_tokens = storage.get_listed_tokens();
-                    emit_report(format!("All listed tokens are: {:?}", listed_tokens)).await;
-                },
-                _ => {
-                    println!("Invalid inspect request received");
-                    emit_report(String::from("Invalid inspect request received")).await;
+                            emit_report(format!(
+                                "User: {}, balance: {:?}",
+                                data.account.to_string(),
+                                balance
+                            ))
+                            .await;
+                        }
+                    }
                 }
             }
-        }
+            _ => {}
+        },
+        Err(err) => match err {
+            CmaParserError::IncompatibleInput => {
+                let listed_tokens = storage.get_listed_tokens();
+                emit_report(format!("All listed tokens are: {:?}", listed_tokens)).await;
+            }
+            _ => {
+                println!("Invalid inspect request received");
+                emit_report(String::from("Invalid inspect request received")).await;
+            }
+        },
     }
     Ok("accept")
 }
@@ -347,7 +461,7 @@ pub fn hex_to_string(hex: &str) -> Result<String, Box<dyn std::error::Error>> {
     Ok(s)
 }
 
-async fn emit_notice( payload: String) {
+async fn emit_notice(payload: String) {
     let hex_string = {
         let s = payload.strip_prefix("0x").unwrap_or(payload.as_str());
         hex::encode(s.as_bytes())
@@ -360,15 +474,15 @@ async fn emit_notice( payload: String) {
         "payload" => format!("0x{}", hex_string),
     };
     let request = hyper::Request::builder()
-    .method(hyper::Method::POST)
-    .header(hyper::header::CONTENT_TYPE, "application/json")
-    .uri(format!("{}/notice", server_addr))
-    .body(hyper::Body::from(response.dump()))
-    .ok();
+        .method(hyper::Method::POST)
+        .header(hyper::header::CONTENT_TYPE, "application/json")
+        .uri(format!("{}/notice", server_addr))
+        .body(hyper::Body::from(response.dump()))
+        .ok();
     let _response = client.request(request.unwrap()).await;
 }
 
-async fn emit_report( payload: String) {
+async fn emit_report(payload: String) {
     println!("GENERATING REPORT WITH THIS DETAILS::: {}", payload);
     let hex_string = {
         let s = payload.strip_prefix("0x").unwrap_or(payload.as_str());
@@ -382,24 +496,24 @@ async fn emit_report( payload: String) {
         "payload" => format!("0x{}", hex_string),
     };
     let request = hyper::Request::builder()
-    .method(hyper::Method::POST)
-    .header(hyper::header::CONTENT_TYPE, "application/json")
-    .uri(format!("{}/report", server_addr))
-    .body(hyper::Body::from(response.dump()))
-    .ok();
+        .method(hyper::Method::POST)
+        .header(hyper::header::CONTENT_TYPE, "application/json")
+        .uri(format!("{}/report", server_addr))
+        .body(hyper::Body::from(response.dump()))
+        .ok();
     let _response = client.request(request.unwrap()).await;
 }
 
-async fn emit_voucher( voucher: JsonValue) -> Option<bool> {
+async fn emit_voucher(voucher: JsonValue) -> Option<bool> {
     let server_addr = env::var("ROLLUP_HTTP_SERVER_URL").expect("ROLLUP_HTTP_SERVER_URL not set");
     let client = hyper::Client::new();
 
     let request = hyper::Request::builder()
-    .method(hyper::Method::POST)
-    .header(hyper::header::CONTENT_TYPE, "application/json")
-    .uri(format!("{}/voucher", server_addr))
-    .body(hyper::Body::from(voucher.dump()))
-    .ok()?;
+        .method(hyper::Method::POST)
+        .header(hyper::header::CONTENT_TYPE, "application/json")
+        .uri(format!("{}/voucher", server_addr))
+        .body(hyper::Body::from(voucher.dump()))
+        .ok()?;
 
     let response = client.request(request).await;
 
@@ -427,8 +541,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let erc721_token = String::from("0xBa46623aD94AB45850c4ecbA9555D26328917c3B");
 
     let list_price: u128 = 100_000_000_000_000_000_000;
-    let mut storage = Storage::new(erc721_portal_address, erc20_portal_address, erc721_token, erc20_token, list_price, ledger);
-
+    let mut storage = Storage::new(
+        erc721_portal_address,
+        erc20_portal_address,
+        erc721_token,
+        erc20_token,
+        list_price,
+        ledger,
+    );
 
     let mut status = "accept";
     loop {
@@ -453,8 +573,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .as_str()
                 .ok_or("request_type is not a string")?;
             status = match request_type {
-                "advance_state" => handle_advance(&client, &server_addr[..], req, &mut storage).await?,
-                "inspect_state" => handle_inspect(&client, &server_addr[..], req, &mut storage).await?,
+                "advance_state" => {
+                    handle_advance(&client, &server_addr[..], req, &mut storage).await?
+                }
+                "inspect_state" => {
+                    handle_inspect(&client, &server_addr[..], req, &mut storage).await?
+                }
                 &_ => {
                     eprintln!("Unknown request type");
                     "reject"

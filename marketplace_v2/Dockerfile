@@ -53,6 +53,7 @@ apt-get update
 apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
+    git \
     libclang-dev \
     g++-riscv64-linux-gnu \
     make \
@@ -90,19 +91,12 @@ WORKDIR /opt/cartesi/dapp
 
 # Copy Cargo files first for better layer caching
 COPY Cargo.toml Cargo.lock ./
-COPY lib/cma-rust-parser/Cargo.toml lib/cma-rust-parser/Cargo.toml
 
 # Copy Cargo configuration for cross-compilation linker settings
 COPY .cargo ./.cargo
 
-# Copy build dependencies needed for bindgen
-COPY lib/cma-rust-parser/build.rs ./lib/cma-rust-parser/build.rs
-COPY lib/cma-rust-parser/wrapper.h ./lib/cma-rust-parser/wrapper.h
-COPY lib/cma-rust-parser/lib ./lib/cma-rust-parser/lib
-
 # Copy source code
 COPY src ./src
-COPY lib/cma-rust-parser/src ./lib/cma-rust-parser/src
 
 # Build with explicit target for cross-compilation
 # Use BuildKit cache mounts to speed up builds
